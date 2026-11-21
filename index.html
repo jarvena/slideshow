@@ -1,0 +1,1306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Privacy: the browser blocks every network request this page could make.
+     Images are only ever read from local File objects via blob: URLs. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Local Slideshow</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #000000;
+    --fade: 1200ms;
+    --blur: 60px;
+    --dim: 0.45;
+    --ui-bg: rgba(18, 18, 20, 0.72);
+    --ui-bg-solid: #161618;
+    --ui-border: rgba(255, 255, 255, 0.10);
+    --ui-fg: #f2f2f4;
+    --ui-muted: #a3a3ad;
+    --ui-hover: rgba(255, 255, 255, 0.10);
+    --accent: #7aa7ff;
+    --accent-fg: #0b1220;
+    --radius: 14px;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #0c0c0e;
+    color: var(--ui-fg);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  svg.icon { width: 22px; height: 22px; display: block; fill: currentColor; }
+
+  /* ---------- Start screen ---------- */
+  #start {
+    position: fixed; inset: 0;
+    display: grid; place-items: center;
+    padding: 16px;
+    background: radial-gradient(1200px 600px at 50% -10%, #1d2233 0%, #0c0c0e 60%);
+    overflow-y: auto;
+  }
+  body.in-show #start { display: none; }
+  .card { width: min(560px, 100%); text-align: center; }
+  .card h1 { font-size: clamp(28px, 6vw, 40px); margin: 0 0 6px; letter-spacing: -0.02em; font-weight: 650; }
+  .card .sub { color: var(--ui-muted); margin: 0 0 28px; }
+  #dropZone {
+    border: 2px dashed rgba(255,255,255,0.18);
+    border-radius: 20px;
+    padding: 36px 20px;
+    background: rgba(255,255,255,0.03);
+    transition: border-color .15s, background .15s;
+  }
+  body.dragging #dropZone { border-color: var(--accent); background: rgba(122,167,255,0.08); }
+  #dropZone p { margin: 0 0 18px; color: var(--ui-muted); }
+  .btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 18px; border-radius: 999px;
+    border: 1px solid var(--ui-border);
+    background: rgba(255,255,255,0.06);
+    cursor: pointer; font-weight: 550;
+    transition: background .15s, transform .05s;
+  }
+  .btn:hover { background: rgba(255,255,255,0.12); }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+  .btn.primary:hover { background: #93b8ff; }
+  .btn svg.icon { width: 18px; height: 18px; }
+  #startStatus { min-height: 1.4em; margin: 16px 0 0; color: var(--ui-muted); font-size: 14px; }
+  #startStatus.error { color: #ff9a8f; }
+  .privacy {
+    display: flex; gap: 10px; align-items: flex-start; text-align: left;
+    margin: 26px auto 0; padding: 12px 14px; max-width: 460px;
+    border-radius: 12px; background: rgba(110, 220, 150, 0.08);
+    border: 1px solid rgba(110, 220, 150, 0.18);
+    color: #bfe8cc; font-size: 14px; line-height: 1.45;
+  }
+  .privacy svg.icon { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+  .keys { margin-top: 18px; color: var(--ui-muted); font-size: 13px; line-height: 1.8; }
+  kbd {
+    display: inline-block; min-width: 1.7em; padding: 0 6px; border-radius: 5px;
+    border: 1px solid var(--ui-border); background: rgba(255,255,255,0.06);
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center;
+  }
+
+  /* ---------- Stage ---------- */
+  #stage {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: none;
+    overflow: hidden;
+    touch-action: none;
+  }
+  body.in-show #stage { display: block; }
+  .layer {
+    position: absolute; inset: 0;
+    overflow: hidden;
+    opacity: 0;
+    background: var(--bg);
+  }
+  body.bg-ambient .layer { background: #000; }
+  .ambient {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    filter: blur(var(--blur)) brightness(var(--dim)) saturate(1.25);
+    transform: scale(1.25);
+    display: none;
+  }
+  body.bg-ambient .ambient { display: block; }
+  .photo {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    transform-origin: 50% 50%;
+    user-select: none; -webkit-user-drag: none;
+  }
+  body.idle, body.idle * { cursor: none !important; }
+
+  #caption {
+    position: absolute; left: 16px; top: 14px; z-index: 10;
+    max-width: calc(100% - 32px);
+    font-size: 14px; line-height: 1.35;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85), 0 0 12px rgba(0,0,0,.5);
+    pointer-events: none;
+    display: none;
+  }
+  body.show-caption #caption { display: block; }
+  #caption .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #caption .date { color: rgba(255,255,255,.8); }
+
+  #toast {
+    position: absolute; left: 50%; top: 18px; z-index: 15;
+    transform: translate(-50%, -8px);
+    padding: 8px 14px; border-radius: 999px;
+    background: var(--ui-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--ui-border);
+    font-size: 14px; white-space: nowrap; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s;
+  }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  #controls {
+    position: absolute; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 20;
+    transform: translateX(-50%);
+    display: flex; align-items: center; gap: 2px;
+    padding: 6px; border-radius: 999px;
+    background: var(--ui-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--ui-border);
+    box-shadow: 0 8px 30px rgba(0,0,0,.35);
+    transition: opacity .35s, transform .35s;
+    max-width: calc(100% - 32px);
+  }
+  body.idle #controls, body.ui-hidden #controls { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+  .ibtn {
+    width: 44px; height: 44px; border-radius: 999px; border: 0;
+    display: grid; place-items: center;
+    background: transparent; cursor: pointer;
+    transition: background .15s;
+    flex: none;
+  }
+  .ibtn:hover { background: var(--ui-hover); }
+  .ibtn:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ibtn.big { width: 52px; height: 52px; background: rgba(255,255,255,.1); }
+  .ibtn.big svg.icon { width: 26px; height: 26px; }
+  #counter {
+    padding: 0 12px; font-size: 14px; color: var(--ui-muted);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .sep { width: 1px; height: 24px; background: var(--ui-border); margin: 0 4px; flex: none; }
+  .ibtn .when-on, body.playing .ibtn .when-off { display: none; }
+  body.playing .ibtn .when-on { display: block; }
+  .ibtn .fs-exit, body.fullscreen .ibtn .fs-enter { display: none; }
+  body.fullscreen .ibtn .fs-exit { display: block; }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 30;
+    width: min(340px, calc(100% - 24px));
+    background: rgba(22, 22, 25, 0.86);
+    backdrop-filter: blur(20px) saturate(1.2); -webkit-backdrop-filter: blur(20px) saturate(1.2);
+    border: 1px solid var(--ui-border);
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+    overflow-y: auto; overscroll-behavior: contain;
+    transform: translateX(calc(100% + 24px));
+    transition: transform .3s cubic-bezier(.2,.8,.2,1);
+    visibility: hidden;
+  }
+  body.panel-open #panel { transform: none; visibility: visible; }
+  .panel-head {
+    position: sticky; top: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 10px 10px 18px;
+    background: linear-gradient(rgba(22,22,25,.96) 70%, rgba(22,22,25,0));
+  }
+  .panel-head h2 { font-size: 16px; margin: 0; font-weight: 650; }
+  .panel-body { padding: 0 18px 18px; }
+  .group { padding: 14px 0; border-top: 1px solid var(--ui-border); }
+  .group:first-child { border-top: 0; padding-top: 4px; }
+  .group-title { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ui-muted); margin: 0 0 10px; font-weight: 600; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; }
+  .row label, .row .lbl { font-size: 14px; }
+  .row .val { font-size: 13px; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+  .seg { display: flex; padding: 3px; border-radius: 10px; background: rgba(255,255,255,.06); gap: 2px; }
+  .seg label { flex: 1; position: relative; }
+  .seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .seg span { display: block; text-align: center; padding: 7px 6px; border-radius: 8px; font-size: 13px; cursor: pointer; transition: background .15s; }
+  .seg input:checked + span { background: rgba(255,255,255,.16); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); }
+  .seg.disabled { opacity: .45; pointer-events: none; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+  input[type=number] {
+    width: 74px; padding: 4px 8px; border-radius: 8px;
+    border: 1px solid var(--ui-border); background: rgba(255,255,255,.06);
+    text-align: right;
+  }
+  input[type=color] { width: 44px; height: 30px; padding: 0 2px; border: 1px solid var(--ui-border); border-radius: 8px; background: transparent; cursor: pointer; }
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(255,255,255,.18); transition: background .15s; }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(18px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .small-btn {
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--ui-border);
+    background: rgba(255,255,255,.06); font-size: 13px; cursor: pointer;
+  }
+  .small-btn:hover { background: rgba(255,255,255,.12); }
+  .sub-opts { padding-left: 2px; }
+  .sub-opts.hidden { display: none; }
+  .stack-btns { display: grid; gap: 8px; }
+  .stack-btns .btn { justify-content: center; border-radius: 10px; padding: 9px 14px; font-size: 14px; }
+  .hint { font-size: 12px; color: var(--ui-muted); line-height: 1.8; margin-top: 4px; }
+  #dateStatus { font-size: 12px; color: var(--ui-muted); min-height: 1em; margin-top: 6px; }
+
+  @media (max-width: 520px) {
+    .ibtn { width: 40px; height: 40px; }
+    .ibtn.big { width: 46px; height: 46px; }
+    #counter { padding: 0 6px; font-size: 13px; }
+  }
+</style>
+</head>
+<body class="bg-ambient">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5.5v13a.5.5 0 0 1-.77.42L9.5 12.42a.5.5 0 0 1 0-.84l9.73-6.5a.5.5 0 0 1 .77.42z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5.5v13a.5.5 0 0 0 .77.42l9.73-6.5a.5.5 0 0 0 0-.84L4.77 5.08A.5.5 0 0 0 4 5.5z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.6v12.8a.6.6 0 0 0 .92.5l10.1-6.4a.6.6 0 0 0 0-1L8.92 5.1A.6.6 0 0 0 8 5.6z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></symbol>
+  <symbol id="i-fs" viewBox="0 0 24 24"><path d="M4 9V4h5v2H6v3zm11-5h5v5h-2V6h-3zM4 15h2v3h3v2H4zm14 0h2v5h-5v-2h3z"/></symbol>
+  <symbol id="i-fs-exit" viewBox="0 0 24 24"><path d="M7 4h2v5H4V7h3zm8 0h2v3h3v2h-5zM4 15h5v5H7v-3H4zm11 0h5v2h-3v3h-2z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h8.5M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="15" cy="7" r="2.5"/><circle cx="9" cy="17" r="2.5"/></g></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6c.6 0 1.2.24 1.6.66L12 6h6.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></symbol>
+  <symbol id="i-images" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 13.5h14l-4.6-6.2a.5.5 0 0 0-.8 0l-3.3 4.4-2.1-2.6a.5.5 0 0 0-.78 0zM8.5 10a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2h.5A1.5 1.5 0 0 1 19 11.5v8a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-8A1.5 1.5 0 0 1 6.5 10zm2 0h6V8a3 3 0 0 0-6 0z"/></symbol>
+</svg>
+
+<!-- ============ Start screen ============ -->
+<main id="start">
+  <div class="card">
+    <h1>Local Slideshow</h1>
+    <p class="sub">Show photos from a folder on this computer.</p>
+    <div id="dropZone">
+      <p>Drop a folder or images here, or choose:</p>
+      <div class="btn-row">
+        <button class="btn primary" id="startFolder" type="button"><svg class="icon"><use href="#i-folder"/></svg>Open folder</button>
+        <button class="btn" id="startFiles" type="button"><svg class="icon"><use href="#i-images"/></svg>Open images</button>
+      </div>
+    </div>
+    <p id="startStatus" role="status" aria-live="polite"></p>
+    <div class="privacy">
+      <svg class="icon"><use href="#i-lock"/></svg>
+      <div><strong>Everything stays on this device.</strong> Photos are read directly by your browser and never uploaded. This page cannot make network requests, and it works offline.</div>
+    </div>
+    <div class="keys">
+      <kbd>Space</kbd> play / pause &nbsp; <kbd>←</kbd><kbd>→</kbd> previous / next &nbsp; <kbd>F</kbd> fullscreen<br>
+      <kbd>S</kbd> settings &nbsp; <kbd>H</kbd> hide controls &nbsp; <kbd>Esc</kbd> close
+    </div>
+  </div>
+</main>
+
+<!-- ============ Slideshow ============ -->
+<div id="stage" aria-label="Slideshow">
+  <div class="layer" id="layerA"><canvas class="ambient" width="64" height="64"></canvas><img class="photo" alt="" draggable="false"></div>
+  <div class="layer" id="layerB"><canvas class="ambient" width="64" height="64"></canvas><img class="photo" alt="" draggable="false"></div>
+
+  <div id="caption"><div class="name"></div><div class="date"></div></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="controls">
+    <button class="ibtn" id="btnPrev" type="button" title="Previous (←)" aria-label="Previous"><svg class="icon"><use href="#i-prev"/></svg></button>
+    <button class="ibtn big" id="btnPlay" type="button" title="Play / pause (Space)" aria-label="Play or pause">
+      <svg class="icon when-off"><use href="#i-play"/></svg><svg class="icon when-on"><use href="#i-pause"/></svg>
+    </button>
+    <button class="ibtn" id="btnNext" type="button" title="Next (→)" aria-label="Next"><svg class="icon"><use href="#i-next"/></svg></button>
+    <span id="counter">0 / 0</span>
+    <span class="sep"></span>
+    <button class="ibtn" id="btnFs" type="button" title="Fullscreen (F)" aria-label="Toggle fullscreen">
+      <svg class="icon fs-enter"><use href="#i-fs"/></svg><svg class="icon fs-exit"><use href="#i-fs-exit"/></svg>
+    </button>
+    <button class="ibtn" id="btnSettings" type="button" title="Settings (S)" aria-label="Settings"><svg class="icon"><use href="#i-settings"/></svg></button>
+  </div>
+
+  <aside id="panel" aria-label="Settings">
+    <div class="panel-head">
+      <h2>Settings</h2>
+      <button class="ibtn" id="btnClosePanel" type="button" aria-label="Close settings"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="panel-body">
+
+      <div class="group">
+        <p class="group-title">Order</p>
+        <div class="seg" role="radiogroup" aria-label="Order">
+          <label><input type="radio" name="order" value="random"><span>Random</span></label>
+          <label><input type="radio" name="order" value="date"><span>Date</span></label>
+          <label><input type="radio" name="order" value="name"><span>Name</span></label>
+        </div>
+        <div class="row">
+          <span class="lbl" id="dirLabel">Direction</span>
+          <button class="small-btn" id="btnDir" type="button">Oldest first</button>
+        </div>
+        <div id="dateStatus"></div>
+      </div>
+
+      <div class="group">
+        <p class="group-title">Timing</p>
+        <div class="row">
+          <label for="durRange">Slide duration</label>
+          <span><input type="number" id="durNum" min="1" max="3600" step="0.5" aria-label="Slide duration in seconds"> <span class="val">s</span></span>
+        </div>
+        <input type="range" id="durRange" min="2" max="60" step="1" aria-label="Slide duration">
+        <div class="row" style="margin-top:14px">
+          <label for="fadeRange">Crossfade</label>
+          <span class="val" id="fadeVal"></span>
+        </div>
+        <input type="range" id="fadeRange" min="0" max="3" step="0.1">
+      </div>
+
+      <div class="group">
+        <p class="group-title">Motion</p>
+        <div class="row">
+          <label for="kbToggle">Dynamic zoom &amp; pan</label>
+          <span class="switch"><input type="checkbox" id="kbToggle"><span></span></span>
+        </div>
+        <div class="sub-opts" id="kbOpts">
+          <div class="seg" role="radiogroup" aria-label="Motion intensity">
+            <label><input type="radio" name="kbIntensity" value="subtle"><span>Subtle</span></label>
+            <label><input type="radio" name="kbIntensity" value="medium"><span>Medium</span></label>
+            <label><input type="radio" name="kbIntensity" value="strong"><span>Strong</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <p class="group-title">Background</p>
+        <div class="seg" role="radiogroup" aria-label="Background">
+          <label><input type="radio" name="bgMode" value="solid"><span>Solid colour</span></label>
+          <label><input type="radio" name="bgMode" value="ambient"><span>Ambient</span></label>
+        </div>
+        <div class="sub-opts" id="solidOpts">
+          <div class="row">
+            <label for="bgColor">Colour</label>
+            <input type="color" id="bgColor">
+          </div>
+        </div>
+        <div class="sub-opts" id="ambientOpts">
+          <div class="row"><label for="blurRange">Blur</label><span class="val" id="blurVal"></span></div>
+          <input type="range" id="blurRange" min="0" max="120" step="2">
+          <div class="row" style="margin-top:12px"><label for="dimRange">Brightness</label><span class="val" id="dimVal"></span></div>
+          <input type="range" id="dimRange" min="10" max="100" step="1">
+        </div>
+      </div>
+
+      <div class="group">
+        <p class="group-title">Display</p>
+        <div class="row">
+          <label for="subToggle">Include subfolders</label>
+          <span class="switch"><input type="checkbox" id="subToggle"><span></span></span>
+        </div>
+        <div class="row">
+          <label for="capToggle">Show file name &amp; date</label>
+          <span class="switch"><input type="checkbox" id="capToggle"><span></span></span>
+        </div>
+      </div>
+
+      <div class="group">
+        <p class="group-title">Images</p>
+        <div class="stack-btns">
+          <button class="btn" id="panelFolder" type="button"><svg class="icon"><use href="#i-folder"/></svg>Open another folder</button>
+          <button class="btn" id="panelFiles" type="button"><svg class="icon"><use href="#i-images"/></svg>Open images</button>
+          <button class="btn" id="btnCloseShow" type="button">Close slideshow</button>
+        </div>
+        <div class="hint">
+          <kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> navigate · <kbd>F</kbd> fullscreen · <kbd>H</kbd> hide controls · <kbd>C</kbd> caption · <kbd>S</kbd> settings
+        </div>
+      </div>
+
+    </div>
+  </aside>
+</div>
+
+<input type="file" id="pickFolder" class="vh" webkitdirectory directory multiple tabindex="-1" aria-hidden="true">
+<input type="file" id="pickFiles" class="vh" multiple accept="image/*" tabindex="-1" aria-hidden="true">
+
+<script type="module">
+'use strict';
+
+/* =====================================================================
+   Settings (persisted locally in this browser only)
+   ===================================================================== */
+const STORE_KEY = 'local-slideshow:settings:v1';
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DEFAULTS = {
+  order: 'random',          // random | date | name
+  desc: false,              // descending for date/name
+  duration: 6,              // seconds per slide
+  transition: 1.2,          // crossfade seconds
+  kenBurns: !reducedMotion,
+  kbIntensity: 'subtle',    // subtle | medium | strong
+  bgMode: 'ambient',        // solid | ambient
+  bgColor: '#000000',
+  ambientBlur: 60,          // px
+  ambientDim: 0.45,         // brightness 0.1 .. 1
+  includeSubfolders: true,
+  showCaption: false,
+};
+const ENUMS = { order: ['random', 'date', 'name'], kbIntensity: ['subtle', 'medium', 'strong'], bgMode: ['solid', 'ambient'] };
+const KB_ZOOM = { subtle: 0.07, medium: 0.12, strong: 0.18 };
+
+const settings = loadSettings();
+
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch { saved = {}; }
+  const s = { ...DEFAULTS };
+  for (const k of Object.keys(DEFAULTS)) {
+    if (!(k in saved) || typeof saved[k] !== typeof DEFAULTS[k]) continue;
+    if (ENUMS[k] && !ENUMS[k].includes(saved[k])) continue;
+    if (typeof saved[k] === 'number' && !Number.isFinite(saved[k])) continue;
+    s[k] = saved[k];
+  }
+  s.duration = clamp(s.duration, 1, 3600);
+  s.transition = clamp(s.transition, 0, 3);
+  s.ambientBlur = clamp(s.ambientBlur, 0, 120);
+  s.ambientDim = clamp(s.ambientDim, 0.1, 1);
+  if (!/^#[0-9a-f]{6}$/i.test(s.bgColor)) s.bgColor = DEFAULTS.bgColor;
+  return s;
+}
+function saveSettings() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch { /* storage unavailable: settings last for this visit only */ }
+}
+
+/* =====================================================================
+   Helpers
+   ===================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const fmtNum = n => n.toLocaleString();
+
+/* =====================================================================
+   State
+   ===================================================================== */
+const body = document.body;
+const stage = $('#stage');
+const layers = [$('#layerA'), $('#layerB')].map(el => ({
+  el,
+  img: $('.photo', el),
+  canvas: $('.ambient', el),
+  item: null,
+  ambientFor: null,
+  kb: null,
+}));
+
+const state = {
+  all: [],            // every loaded image item
+  items: [],          // after subfolder filter
+  order: [],          // items in display order
+  pos: 0,
+  targetPos: 0,       // slide being loaded (equals pos once it is on screen)
+  current: null,
+  active: 0,          // index into layers of the visible layer
+  playing: true,
+  inShow: false,
+  showToken: 0,
+  timer: null,
+  timerDue: 0,
+  remaining: 0,
+  slideDur: 0,
+  fadeTimer: null,
+  datesReady: true,
+  datesPromise: Promise.resolve(),
+  datesDone: 0,
+  scanToken: 0,
+  wakeLock: null,
+  preload: null,
+};
+const urls = new Map(); // item -> object URL (only a few alive at a time)
+
+/* =====================================================================
+   File loading
+   ===================================================================== */
+const IMG_EXT = /\.(jpe?g|jfif|pjpeg|pjp|png|apng|gif|webp|avif|bmp|ico)$/i;
+const IMG_MIME = /^image\/(jpeg|pjpeg|png|apng|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/i;
+const JPEG = /\.(jpe?g|jfif|pjpeg|pjp)$/i;
+
+function isDisplayable(file) {
+  if (file.name.startsWith('.')) return false;          // hidden / macOS "._" metadata files
+  return IMG_EXT.test(file.name) || IMG_MIME.test(file.type);
+}
+
+async function loadEntries(entries) {
+  // entries: [{ file, path }]
+  setStartStatus(`Reading ${fmtNum(entries.length)} files…`);
+  const items = [];
+  let skipped = 0;
+  for (const { file, path } of entries) {
+    if (!isDisplayable(file)) { skipped++; continue; }
+    const p = path || file.name;
+    items.push({
+      file,
+      path: p,
+      name: file.name,
+      top: p.split('/').length <= 2,   // file directly in a picked/dropped folder (or a loose file)
+      date: null,
+      dateSource: null,
+      jpeg: JPEG.test(file.name) || /jpeg/i.test(file.type),
+      broken: false,
+    });
+  }
+  if (!items.length) {
+    setStartStatus(skipped ? `No supported images found (${fmtNum(skipped)} other files ignored).` : 'No images found.', true);
+    return;
+  }
+
+  // Reset any previous show
+  stopShow(false);
+  state.all = items;
+  startDateScan();
+  const fellBack = applyFilter();
+
+  const skippedMsg = (skipped ? ` · ${fmtNum(skipped)} non-image files ignored` : '') +
+    (fellBack ? ' · none directly in folder, showing subfolders' : '');
+  if (settings.order === 'date' && !state.datesReady) {
+    setStartStatus(`Reading photo dates…`);
+    await waitForDates(msg => setStartStatus(msg));
+  }
+  setStartStatus('');
+  rebuildOrder(null);
+  enterShow();
+  toast(`${fmtNum(state.items.length)} images${skippedMsg}`, 2600);
+  show(0, 1);
+}
+
+async function filesFromDrop(dataTransfer) {
+  const roots = [];
+  for (const item of dataTransfer.items || []) {
+    if (item.kind !== 'file') continue;
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (entry) roots.push(entry);
+    else { const f = item.getAsFile(); if (f) roots.push({ plainFile: f }); }
+  }
+  if (!roots.length && dataTransfer.files) {
+    return [...dataTransfer.files].map(file => ({ file, path: file.name }));
+  }
+  const out = [];
+  const fileOf = entry => new Promise((res, rej) => entry.file(res, rej));
+  const readBatch = reader => new Promise((res, rej) => reader.readEntries(res, rej));
+  async function walk(entry) {
+    if (entry.plainFile) { out.push({ file: entry.plainFile, path: entry.plainFile.name }); return; }
+    if (entry.isFile) {
+      try { out.push({ file: await fileOf(entry), path: entry.fullPath.replace(/^\/+/, '') }); } catch { /* unreadable */ }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) {
+        let batch;
+        try { batch = await readBatch(reader); } catch { break; }
+        if (!batch.length) break;
+        await Promise.all(batch.map(walk));
+        if (out.length % 500 < batch.length) setStartStatus(`Scanning… ${fmtNum(out.length)} files`);
+      }
+    }
+  }
+  for (const r of roots) await walk(r);
+  return out;
+}
+
+function applyFilter() {
+  let items = settings.includeSubfolders ? state.all : state.all.filter(i => i.top);
+  let fellBack = false;
+  if (!items.length && state.all.length) { items = state.all; fellBack = true; }
+  state.items = items;
+  return fellBack;
+}
+
+/* =====================================================================
+   Dates: EXIF DateTimeOriginal → date in file name → file modified time
+   ===================================================================== */
+function startDateScan() {
+  const token = ++state.scanToken;
+  const queue = state.all.filter(i => i.date == null);
+  state.datesDone = state.all.length - queue.length;
+  if (!queue.length) { state.datesReady = true; state.datesPromise = Promise.resolve(); return; }
+  state.datesReady = false;
+  let idx = 0;
+  const worker = async () => {
+    while (idx < queue.length) {
+      if (token !== state.scanToken) return;
+      const it = queue[idx++];
+      await resolveDate(it);
+      state.datesDone++;
+      if (state.datesDone % 25 === 0) updateDateStatus();
+    }
+  };
+  state.datesPromise = Promise.all(Array.from({ length: 8 }, worker)).then(() => {
+    if (token === state.scanToken) { state.datesReady = true; updateDateStatus(); updateCaption(); }
+  });
+}
+
+async function waitForDates(onProgress) {
+  const total = state.all.length;
+  const iv = setInterval(() => onProgress(`Reading photo dates… ${fmtNum(state.datesDone)} / ${fmtNum(total)}`), 150);
+  try { await state.datesPromise; } finally { clearInterval(iv); }
+}
+
+async function resolveDate(it) {
+  let d = null;
+  if (it.jpeg) {
+    try { d = await readExifDate(it.file); } catch { d = null; }
+    if (d != null) { it.date = d; it.dateSource = 'exif'; return; }
+  }
+  d = dateFromName(it.name);
+  if (d != null) { it.date = d; it.dateSource = 'name'; return; }
+  it.date = it.file.lastModified || 0;
+  it.dateSource = 'file';
+}
+
+function dateFromName(name) {
+  // 20190710_144114, IMG_20190710_144114, PXL_20210305_120529123, 2019-07-10 14.41.13, Screenshot 2021-03-05 at 12.05.29 …
+  const m = /(?:^|[^0-9])((?:19|20)\d\d)[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?:(?:[-_ T.]|\sat\s)?([01]\d|2[0-3])[-_.:h]?([0-5]\d)[-_.:m]?([0-5]\d))?/.exec(name);
+  if (!m) return null;
+  const [, Y, M, D, h = '0', mi = '0', s = '0'] = m;
+  const t = new Date(+Y, +M - 1, +D, +h, +mi, +s).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function parseExifDateString(s) {
+  const m = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || '');
+  if (!m) return null;
+  const [Y, M, D, h, mi, se] = m.slice(1).map(Number);
+  if (Y < 1900 || M < 1 || M > 12 || D < 1 || D > 31) return null;
+  const t = new Date(Y, M - 1, D, h, mi, se).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+async function readExifDate(file) {
+  const buf = await file.slice(0, 131072).arrayBuffer();
+  const v = new DataView(buf);
+  const len = v.byteLength;
+  if (len < 4 || v.getUint16(0) !== 0xFFD8) return null;     // not a JPEG
+  let off = 2;
+  while (off + 4 <= len) {
+    if (v.getUint8(off) !== 0xFF) return null;
+    const marker = v.getUint8(off + 1);
+    if (marker === 0xFF) { off++; continue; }                          // fill byte
+    if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD8)) { off += 2; continue; } // standalone markers
+    if (marker === 0xDA || marker === 0xD9) return null;               // image data starts: no EXIF
+    const segLen = v.getUint16(off + 2);
+    if (segLen < 2) return null;
+    if (marker === 0xE1 && off + 10 <= len &&
+        v.getUint32(off + 4) === 0x45786966 /* "Exif" */ && v.getUint16(off + 8) === 0) {
+      return parseTiffDate(v, off + 10, Math.min(len, off + 2 + segLen));
+    }
+    off += 2 + segLen;
+  }
+  return null;
+}
+
+function parseTiffDate(v, start, end) {
+  if (start + 8 > end) return null;
+  const bom = v.getUint16(start);
+  const le = bom === 0x4949;
+  if (!le && bom !== 0x4D4D) return null;
+  const u16 = o => v.getUint16(o, le);
+  const u32 = o => v.getUint32(o, le);
+  if (u16(start + 2) !== 42) return null;
+
+  const readIfd = rel => {
+    const o = start + rel;
+    if (rel < 8 || o + 2 > end) return null;
+    const n = u16(o);
+    const tags = new Map();
+    for (let i = 0; i < n; i++) {
+      const e = o + 2 + i * 12;
+      if (e + 12 > end) break;
+      tags.set(u16(e), { type: u16(e + 2), count: u32(e + 4), at: e + 8 });
+    }
+    return tags;
+  };
+  const readAscii = t => {
+    if (!t || t.type !== 2 || t.count < 10) return null;
+    const o = t.count <= 4 ? t.at : start + u32(t.at);
+    if (o + t.count > end) return null;
+    let s = '';
+    for (let i = 0; i < t.count; i++) {
+      const c = v.getUint8(o + i);
+      if (!c) break;
+      s += String.fromCharCode(c);
+    }
+    return s;
+  };
+
+  const ifd0 = readIfd(u32(start + 4));
+  if (!ifd0) return null;
+  const ptr = ifd0.get(0x8769);
+  const exif = ptr ? readIfd(u32(ptr.at)) : null;
+  const candidates = [
+    exif && exif.get(0x9003),   // DateTimeOriginal
+    exif && exif.get(0x9004),   // DateTimeDigitized
+    ifd0.get(0x0132),           // DateTime
+  ];
+  for (const t of candidates) {
+    const d = parseExifDateString(readAscii(t));
+    if (d != null) return d;
+  }
+  return null;
+}
+
+/* =====================================================================
+   Ordering
+   ===================================================================== */
+function sortItems(arr) {
+  if (settings.order === 'name') {
+    arr.sort((a, b) => collator.compare(a.path, b.path));
+  } else if (settings.order === 'date') {
+    arr.sort((a, b) => ((a.date ?? 0) - (b.date ?? 0)) || collator.compare(a.path, b.path));
+  }
+  if (settings.order !== 'random' && settings.desc) arr.reverse();
+  return arr;
+}
+
+function rebuildOrder(keep) {
+  const arr = state.items.slice();
+  if (settings.order === 'random') {
+    shuffle(arr);
+    if (keep) {
+      // keep showing the current image, then continue through all the others
+      const i = arr.indexOf(keep);
+      if (i > 0) { arr.splice(i, 1); arr.unshift(keep); }
+    }
+  } else {
+    sortItems(arr);
+  }
+  state.order = arr;
+  const i = keep ? arr.indexOf(keep) : -1;
+  state.pos = state.targetPos = i >= 0 ? i : 0;
+  updateCounter();
+}
+
+async function applyOrderChange() {
+  if (!state.inShow) return;
+  if (settings.order === 'date' && !state.datesReady) {
+    const want = settings.order;
+    await waitForDates(msg => toast(msg, 0));
+    hideToast();
+    if (settings.order !== want) return;
+  }
+  rebuildOrder(state.current);
+  manageUrls();
+  preloadNext();
+}
+
+/* =====================================================================
+   Display engine
+   ===================================================================== */
+function urlFor(item) {
+  let u = urls.get(item);
+  if (!u) { u = URL.createObjectURL(item.file); urls.set(item, u); }
+  return u;
+}
+function neighbor(delta) {
+  const n = state.order.length;
+  if (!n) return null;
+  return state.order[(((state.pos + delta) % n) + n) % n];
+}
+function manageUrls() {
+  const keep = new Set([layers[0].item, layers[1].item, state.current, neighbor(1), neighbor(-1)]);
+  for (const [item, u] of urls) {
+    if (!keep.has(item)) { URL.revokeObjectURL(u); urls.delete(item); }
+  }
+}
+function revokeAllUrls() {
+  for (const u of urls.values()) URL.revokeObjectURL(u);
+  urls.clear();
+}
+function preloadNext() {
+  const nx = neighbor(1);
+  if (!nx || nx === state.current || state.order.length < 2) return;
+  const img = new Image();
+  img.src = urlFor(nx);
+  img.decode().catch(() => {});
+  state.preload = img;
+}
+
+function effectiveFadeMs() {
+  return Math.round(Math.min(settings.transition, settings.duration * 0.5) * 1000);
+}
+
+function snap(el, opacity) {
+  el.style.transition = 'none';
+  el.style.opacity = String(opacity);
+  void el.offsetWidth; // flush so the next change can animate from here
+}
+
+async function show(pos, dir = 1, attempts = 0) {
+  const n = state.order.length;
+  if (!n) return;
+  const token = ++state.showToken;
+  clearTimeout(state.timer); state.timer = null;
+  pos = ((pos % n) + n) % n;
+  state.targetPos = pos;   // rapid next/prev presses step from here, not from the slide still on screen
+  const item = state.order[pos];
+
+  const front = layers[state.active];
+  const back = layers[1 - state.active];
+
+  // Finish any crossfade still running, so the back layer is hidden before we change it.
+  clearTimeout(state.fadeTimer);
+  if (front.item) snap(front.el, 1);
+  snap(back.el, 0);
+  if (back.kb) { back.kb.cancel(); back.kb = null; }
+
+  try {
+    back.img.src = urlFor(item);
+    await back.img.decode();
+  } catch {
+    if (token !== state.showToken) return;
+    item.broken = true;
+    if (attempts >= n - 1) { toast('None of these images could be displayed', 4000); return; }
+    toast(`Skipped unreadable image: ${item.name}`, 2000);
+    return show(pos + dir, dir, attempts + 1);
+  }
+  if (token !== state.showToken) return;
+
+  back.item = item;
+  if (settings.bgMode === 'ambient') drawAmbient(back);
+
+  const fadeMs = effectiveFadeMs();
+  stage.style.setProperty('--fade', fadeMs + 'ms');
+  // Incoming layer fades in on top of the outgoing one (no brightness dip mid-fade).
+  back.el.style.zIndex = '2';
+  front.el.style.zIndex = '1';
+  back.el.style.transition = `opacity ${fadeMs}ms ease-in-out`;
+  back.el.style.opacity = '1';
+  const outgoing = front;
+  state.fadeTimer = setTimeout(() => {
+    snap(outgoing.el, 0);
+    if (outgoing.kb) { outgoing.kb.cancel(); outgoing.kb = null; }
+  }, fadeMs + 30);
+
+  state.active = 1 - state.active;
+  state.pos = pos;
+  state.current = item;
+  state.slideDur = settings.duration * 1000;
+  startKenBurns(back, settings.duration * 1000 + fadeMs);
+
+  updateCounter();
+  updateCaption();
+  manageUrls();
+  preloadNext();
+
+  if (state.playing && n > 1) schedule(state.slideDur);
+  else state.remaining = state.slideDur;
+}
+
+function schedule(ms) {
+  clearTimeout(state.timer);
+  state.timerDue = performance.now() + ms;
+  state.timer = setTimeout(() => { state.timer = null; next(); }, Math.max(0, ms));
+}
+
+function next() {
+  const n = state.order.length;
+  if (!n) return;
+  if (state.targetPos + 1 >= n && settings.order === 'random' && n > 1) {
+    // New loop: reshuffle, but never start with the image that is on screen now
+    const arr = shuffle(state.items.slice());
+    if (arr[0] === state.current) {
+      const j = 1 + Math.floor(Math.random() * (n - 1));
+      [arr[0], arr[j]] = [arr[j], arr[0]];
+    }
+    state.order = arr;
+    state.pos = Math.max(0, arr.indexOf(state.current));
+    show(0, 1);
+    return;
+  }
+  show(state.targetPos + 1, 1);
+}
+function prev() { show(state.targetPos - 1, -1); }
+
+function setPlaying(on, announce = true) {
+  state.playing = on;
+  body.classList.toggle('playing', on);
+  const front = layers[state.active];
+  if (on) {
+    if (front.kb && front.kb.playState === 'paused') front.kb.play();
+    if (state.order.length > 1 && state.current) schedule(state.remaining > 0 ? state.remaining : state.slideDur);
+  } else {
+    if (state.timer) {
+      state.remaining = Math.max(0, state.timerDue - performance.now());
+      clearTimeout(state.timer); state.timer = null;
+    }
+    for (const l of layers) if (l.kb && l.kb.playState === 'running') l.kb.pause();
+  }
+  if (announce) toast(on ? 'Playing' : 'Paused', 900);
+  updateWakeLock();
+}
+
+/* ---------- Ken Burns ---------- */
+function startKenBurns(layer, totalMs) {
+  if (layer.kb) { layer.kb.cancel(); layer.kb = null; }
+  if (!settings.kenBurns || !layer.item || !layer.img.animate) return;
+  const k = KB_ZOOM[settings.kbIntensity] || KB_ZOOM.subtle;
+  const sLow = 1 + k * 0.15;
+  const sHigh = 1 + k;
+  // Max pan (in % of the image box) that keeps the scaled image covering its box.
+  const maxPan = s => (s - 1) / 2 * 100 * 0.85;
+  const ang = Math.random() * Math.PI * 2;
+  const dx = Math.cos(ang), dy = Math.sin(ang);
+  const near = { s: sLow, x: -dx * maxPan(sLow), y: -dy * maxPan(sLow) };
+  const reach = rand(0.5, 1);
+  const far = { s: sHigh, x: dx * maxPan(sHigh) * reach, y: dy * maxPan(sHigh) * reach };
+  const [from, to] = Math.random() < 0.5 ? [near, far] : [far, near];   // zoom in or zoom out
+  const tf = o => `translate(${o.x.toFixed(3)}%, ${o.y.toFixed(3)}%) scale(${o.s.toFixed(4)})`;
+  layer.kb = layer.img.animate(
+    [{ transform: tf(from) }, { transform: tf(to) }],
+    { duration: Math.max(500, totalMs), easing: 'linear', fill: 'forwards' }
+  );
+  if (!state.playing) layer.kb.pause();
+}
+
+/* ---------- Ambient background ---------- */
+function drawAmbient(layer) {
+  const img = layer.img;
+  if (!layer.item || !img.naturalWidth) return;
+  const scale = 64 / Math.max(img.naturalWidth, img.naturalHeight);
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const c = layer.canvas;
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
+  layer.ambientFor = layer.item;
+}
+
+/* =====================================================================
+   UI: info, caption, toast
+   ===================================================================== */
+function updateCounter() {
+  const n = state.order.length;
+  $('#counter').textContent = n ? `${fmtNum(state.pos + 1)} / ${fmtNum(n)}` : '0 / 0';
+}
+function updateCaption() {
+  const it = state.current;
+  $('#caption .name').textContent = it ? it.path : '';
+  let date = '';
+  if (it && it.date != null && it.dateSource !== 'file') {
+    date = new Date(it.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  } else if (it && it.dateSource === 'file') {
+    date = 'Modified ' + new Date(it.date).toLocaleDateString(undefined, { dateStyle: 'medium' });
+  }
+  $('#caption .date').textContent = date;
+}
+function updateDateStatus() {
+  const el = $('#dateStatus');
+  if (state.datesReady || !state.all.length) { el.textContent = ''; return; }
+  el.textContent = `Reading photo dates… ${fmtNum(state.datesDone)} / ${fmtNum(state.all.length)}`;
+}
+
+let toastTimer = null;
+function toast(msg, ms = 1600) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(toastTimer);
+  if (ms > 0) toastTimer = setTimeout(hideToast, ms);
+}
+function hideToast() { $('#toast').classList.remove('on'); }
+
+function setStartStatus(msg, isError = false) {
+  const el = $('#startStatus');
+  el.textContent = msg;
+  el.classList.toggle('error', isError);
+}
+
+/* =====================================================================
+   Enter / leave the slideshow
+   ===================================================================== */
+function enterShow() {
+  state.inShow = true;
+  body.classList.add('in-show');
+  setPlaying(state.playing, false);
+  wakeUi();
+}
+function stopShow(toStart = true) {
+  state.showToken++;
+  clearTimeout(state.timer); state.timer = null;
+  clearTimeout(state.fadeTimer);
+  state.scanToken++;
+  for (const l of layers) {
+    if (l.kb) { l.kb.cancel(); l.kb = null; }
+    l.img.removeAttribute('src');
+    l.item = null; l.ambientFor = null;
+    snap(l.el, 0);
+  }
+  revokeAllUrls();
+  state.preload = null;
+  state.current = null;
+  state.order = []; state.pos = 0; state.targetPos = 0; state.remaining = 0;
+  if (toStart) {
+    state.all = []; state.items = [];
+    state.inShow = false;
+    body.classList.remove('in-show', 'panel-open');
+    exitFullscreen();
+    updateWakeLock();
+  }
+}
+
+/* =====================================================================
+   Apply settings to the page
+   ===================================================================== */
+function applyVisualSettings() {
+  const root = document.documentElement.style;
+  root.setProperty('--bg', settings.bgColor);
+  root.setProperty('--blur', settings.ambientBlur + 'px');
+  root.setProperty('--dim', String(settings.ambientDim));
+  body.classList.toggle('bg-ambient', settings.bgMode === 'ambient');
+  body.classList.toggle('bg-solid', settings.bgMode === 'solid');
+  body.classList.toggle('show-caption', settings.showCaption);
+}
+
+function syncPanel() {
+  for (const r of $$('input[name=order]')) r.checked = r.value === settings.order;
+  for (const r of $$('input[name=kbIntensity]')) r.checked = r.value === settings.kbIntensity;
+  for (const r of $$('input[name=bgMode]')) r.checked = r.value === settings.bgMode;
+  const dirBtn = $('#btnDir');
+  if (settings.order === 'random') { $('#dirLabel').textContent = 'Shuffle'; dirBtn.textContent = 'Reshuffle'; }
+  else if (settings.order === 'date') { $('#dirLabel').textContent = 'Direction'; dirBtn.textContent = settings.desc ? 'Newest first' : 'Oldest first'; }
+  else { $('#dirLabel').textContent = 'Direction'; dirBtn.textContent = settings.desc ? 'Z → A' : 'A → Z'; }
+  $('#durNum').value = String(settings.duration);
+  $('#durRange').value = String(clamp(Math.round(settings.duration), 2, 60));
+  $('#fadeRange').value = String(settings.transition);
+  $('#fadeVal').textContent = settings.transition ? settings.transition.toFixed(1) + ' s' : 'Off';
+  $('#kbToggle').checked = settings.kenBurns;
+  $('#kbOpts .seg').classList.toggle('disabled', !settings.kenBurns);
+  $('#solidOpts').classList.toggle('hidden', settings.bgMode !== 'solid');
+  $('#ambientOpts').classList.toggle('hidden', settings.bgMode !== 'ambient');
+  $('#bgColor').value = settings.bgColor;
+  $('#blurRange').value = String(settings.ambientBlur);
+  $('#blurVal').textContent = settings.ambientBlur + ' px';
+  $('#dimRange').value = String(Math.round(settings.ambientDim * 100));
+  $('#dimVal').textContent = Math.round(settings.ambientDim * 100) + ' %';
+  $('#subToggle').checked = settings.includeSubfolders;
+  $('#capToggle').checked = settings.showCaption;
+  updateDateStatus();
+}
+
+function changed() { saveSettings(); applyVisualSettings(); syncPanel(); }
+
+function setDuration(sec) {
+  sec = clamp(Number(sec) || DEFAULTS.duration, 1, 3600);
+  const oldDur = state.slideDur || settings.duration * 1000;
+  settings.duration = sec;
+  changed();
+  if (!state.current) return;
+  const newDur = sec * 1000;
+  const remainingOld = state.timer ? state.timerDue - performance.now() : state.remaining;
+  const elapsed = Math.max(0, oldDur - remainingOld);
+  const remaining = Math.max(400, newDur - elapsed);
+  state.slideDur = newDur;
+  const kb = layers[state.active].kb;
+  if (kb) kb.effect.updateTiming({ duration: Math.max(elapsed + remaining + effectiveFadeMs(), 500) });
+  if (state.timer) schedule(remaining); else state.remaining = remaining;
+}
+
+/* =====================================================================
+   Event wiring
+   ===================================================================== */
+const pickFolder = $('#pickFolder');
+const pickFiles = $('#pickFiles');
+function openFolder() { pickFolder.click(); }
+function openFiles() { pickFiles.click(); }
+for (const input of [pickFolder, pickFiles]) {
+  input.addEventListener('change', () => {
+    const files = [...input.files].map(file => ({ file, path: file.webkitRelativePath || file.name }));
+    input.value = '';
+    if (files.length) loadEntries(files);
+  });
+}
+$('#startFolder').addEventListener('click', openFolder);
+$('#startFiles').addEventListener('click', openFiles);
+$('#panelFolder').addEventListener('click', openFolder);
+$('#panelFiles').addEventListener('click', openFiles);
+$('#btnCloseShow').addEventListener('click', () => stopShow(true));
+
+// Drag & drop anywhere
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { if (hasFiles(e)) { e.preventDefault(); dragDepth++; body.classList.add('dragging'); } });
+window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) body.classList.remove('dragging'); });
+window.addEventListener('dragover', e => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+window.addEventListener('drop', async e => {
+  e.preventDefault();
+  dragDepth = 0; body.classList.remove('dragging');
+  if (!hasFiles(e)) return;
+  if (state.inShow) toast('Reading dropped files…', 0);
+  const entries = await filesFromDrop(e.dataTransfer);
+  hideToast();
+  if (entries.length) loadEntries(entries);
+});
+function hasFiles(e) { return e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files'); }
+
+// Controls
+function onBtn(id, fn) {
+  const b = $(id);
+  b.addEventListener('click', e => { fn(e); if (e.detail > 0) b.blur(); });
+}
+onBtn('#btnPrev', () => prev());
+onBtn('#btnNext', () => next());
+onBtn('#btnPlay', () => setPlaying(!state.playing));
+onBtn('#btnFs', () => toggleFullscreen());
+onBtn('#btnSettings', () => togglePanel());
+onBtn('#btnClosePanel', () => togglePanel(false));
+
+function togglePanel(force) {
+  const open = force ?? !body.classList.contains('panel-open');
+  body.classList.toggle('panel-open', open);
+  if (open) { syncPanel(); body.classList.remove('idle'); clearTimeout(idleTimer); }
+  else wakeUi();
+}
+
+// Settings panel inputs
+for (const r of $$('input[name=order]')) r.addEventListener('change', () => {
+  settings.order = r.value; changed(); applyOrderChange();
+  toast(`Order: ${r.value === 'random' ? 'Random' : r.value === 'date' ? 'Date' : 'Name'}`, 1200);
+});
+$('#btnDir').addEventListener('click', () => {
+  if (settings.order !== 'random') settings.desc = !settings.desc;
+  changed(); applyOrderChange();
+  if (settings.order === 'random') toast('Reshuffled', 1000);
+});
+$('#durRange').addEventListener('input', e => setDuration(e.target.value));
+$('#durNum').addEventListener('change', e => setDuration(e.target.value));
+$('#fadeRange').addEventListener('input', e => { settings.transition = clamp(+e.target.value, 0, 3); changed(); });
+$('#kbToggle').addEventListener('change', e => {
+  settings.kenBurns = e.target.checked; changed();
+  const front = layers[state.active];
+  if (!settings.kenBurns) { for (const l of layers) if (l.kb) { l.kb.cancel(); l.kb = null; } }
+  else if (front.item) {
+    const left = state.timer ? state.timerDue - performance.now() : (state.remaining || state.slideDur);
+    startKenBurns(front, left + effectiveFadeMs());
+  }
+});
+for (const r of $$('input[name=kbIntensity]')) r.addEventListener('change', () => { settings.kbIntensity = r.value; changed(); });
+for (const r of $$('input[name=bgMode]')) r.addEventListener('change', () => {
+  settings.bgMode = r.value; changed();
+  if (settings.bgMode === 'ambient') for (const l of layers) if (l.item && l.ambientFor !== l.item) drawAmbient(l);
+});
+$('#bgColor').addEventListener('input', e => { settings.bgColor = e.target.value; changed(); });
+$('#blurRange').addEventListener('input', e => { settings.ambientBlur = +e.target.value; changed(); });
+$('#dimRange').addEventListener('input', e => { settings.ambientDim = clamp(+e.target.value / 100, 0.1, 1); changed(); });
+$('#subToggle').addEventListener('change', e => {
+  settings.includeSubfolders = e.target.checked; changed();
+  if (!state.inShow) return;
+  const fellBack = applyFilter();
+  const keep = state.items.includes(state.current) ? state.current : null;
+  rebuildOrder(keep);
+  if (!keep) show(0, 1); else { manageUrls(); preloadNext(); }
+  toast(fellBack ? 'No images directly in this folder — showing subfolders too' : `${fmtNum(state.items.length)} images`, fellBack ? 3000 : 1400);
+});
+$('#capToggle').addEventListener('change', e => { settings.showCaption = e.target.checked; changed(); });
+
+// Close the panel when clicking on the picture
+stage.addEventListener('click', e => {
+  if (body.classList.contains('panel-open') && !e.target.closest('#panel, #controls')) togglePanel(false);
+});
+stage.addEventListener('dblclick', e => { if (!e.target.closest('#panel, #controls')) toggleFullscreen(); });
+
+// Touch: swipe to navigate, tap to show controls
+let touchStart = null;
+stage.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse' && !e.target.closest('#panel, #controls')) touchStart = { x: e.clientX, y: e.clientY, t: performance.now() };
+});
+stage.addEventListener('pointerup', e => {
+  if (!touchStart) return;
+  const dx = e.clientX - touchStart.x, dy = e.clientY - touchStart.y;
+  touchStart = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.3) { dx < 0 ? next() : prev(); }
+});
+stage.addEventListener('pointercancel', () => { touchStart = null; });
+
+// Auto-hide controls and cursor
+let idleTimer = null;
+let overControls = false;
+$('#controls').addEventListener('pointerenter', () => { overControls = true; });
+$('#controls').addEventListener('pointerleave', () => { overControls = false; wakeUi(); });
+function wakeUi() {
+  body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (state.inShow && !overControls && !body.classList.contains('panel-open')) body.classList.add('idle');
+  }, 2800);
+}
+window.addEventListener('pointermove', wakeUi, { passive: true });
+window.addEventListener('pointerdown', wakeUi, { passive: true });
+
+// Keyboard
+window.addEventListener('keydown', e => {
+  if (!state.inShow || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  const inField = t instanceof HTMLElement && t.matches('input, select, textarea');
+  if (e.key === 'Escape') {
+    if (body.classList.contains('panel-open')) { togglePanel(false); e.preventDefault(); }
+    return; // the browser leaves fullscreen on Esc by itself
+  }
+  if (inField) return;
+  if (t instanceof HTMLElement && t.matches('button') && (e.key === ' ' || e.key === 'Enter')) return;
+  switch (e.key) {
+    case ' ': case 'k': case 'K': e.preventDefault(); setPlaying(!state.playing); break;
+    case 'ArrowRight': case 'PageDown': e.preventDefault(); next(); break;
+    case 'ArrowLeft': case 'PageUp': e.preventDefault(); prev(); break;
+    case 'Home': e.preventDefault(); show(0, 1); break;
+    case 'End': e.preventDefault(); show(state.order.length - 1, -1); break;
+    case 'f': case 'F': toggleFullscreen(); break;
+    case 's': case 'S': togglePanel(); break;
+    case 'h': case 'H': body.classList.toggle('ui-hidden'); toast(body.classList.contains('ui-hidden') ? 'Controls hidden — press H to show' : 'Controls shown', 1400); break;
+    case 'c': case 'C': settings.showCaption = !settings.showCaption; changed(); break;
+    default: return;
+  }
+});
+
+// Fullscreen
+function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
+function toggleFullscreen() {
+  if (fsElement()) { exitFullscreen(); return; }
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (req) Promise.resolve(req.call(el)).catch(() => toast('Fullscreen not available', 1500));
+}
+function exitFullscreen() {
+  if (!fsElement()) return;
+  const ex = document.exitFullscreen || document.webkitExitFullscreen;
+  if (ex) Promise.resolve(ex.call(document)).catch(() => {});
+}
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(ev, () => body.classList.toggle('fullscreen', !!fsElement()));
+}
+
+// Keep the screen awake while playing (where supported)
+async function updateWakeLock() {
+  try {
+    const want = state.inShow && state.playing && document.visibilityState === 'visible';
+    if (want && !state.wakeLock && navigator.wakeLock) {
+      const lock = await navigator.wakeLock.request('screen');
+      state.wakeLock = lock;
+      lock.addEventListener('release', () => { if (state.wakeLock === lock) state.wakeLock = null; });
+    } else if (!want && state.wakeLock) {
+      const lock = state.wakeLock; state.wakeLock = null;
+      await lock.release();
+    }
+  } catch { /* not supported or not allowed */ }
+}
+document.addEventListener('visibilitychange', updateWakeLock);
+
+/* =====================================================================
+   Init
+   ===================================================================== */
+applyVisualSettings();
+syncPanel();
+body.classList.add('playing');
+
+// Small hooks for automated checks (read-only inspection, no network).
+window.__slideshow = { state, settings, layers };
+</script>
+</body>
+</html>
